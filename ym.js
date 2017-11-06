@@ -10,6 +10,11 @@ lyrics = lyrics.replace(/(?:\r\n|\r|\n)/g, '\\n');
 lyrics = lyrics.replace(/'/g, "\\'");
 
 var lang = 'en';
+
+if (/[Р-пр-џ]/.test(lyrics)) {
+    lang = 'ru';
+}
+
 var genre = 'alternative_rock';
 
 var sql = "INSERT INTO `songs` (`artist`, `title`, `lyrics`, `lang`, `genre`) VALUES ('" + artist + "', '" + title + "', '" + lyrics + "', '" + lang + "', '" + genre + "');";
