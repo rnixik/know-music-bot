@@ -10,6 +10,7 @@ import (
   "sort"
   "github.com/joho/godotenv"
   "os"
+  "strings"
 )
 
 type Song struct {
@@ -27,10 +28,14 @@ type UserScore struct {
   Score int
 }
 
-var rightAnswers map[int64]*Song
-var usersScoresByChats map[int64](map[int]UserScore)
+const (
+  defaultGenre = "alternative_rock"
+)
 
-var genre string
+
+var rightAnswersByInlineMessages map[string]*Song
+var usersScoresByInlineMessages map[string](map[int]UserScore)
+var genresByInlineMessages map[string]string
 
 func main() {
 
@@ -39,9 +44,9 @@ func main() {
     log.Fatal("Error loading .env file")
   }
 
-  conn, err := sqlx.Connect("mysql", os.Getenv("DB_USER") + ":" + os.Getenv("DB_PASS") + "@tcp(localhost:3306)/guess_song")
+  conn, err := sqlx.Open("mysql", os.Getenv("DB_USER") + ":" + os.Getenv("DB_PASS") + "@tcp(localhost:3306)/guess_song")
   if err != nil {
-    panic(err)
+    log.Panic(err)
   }
 
   bot, err := tgbotapi.NewBotAPI(os.Getenv("BOT_TOKEN"))
@@ -49,16 +54,11 @@ func main() {
     log.Panic(err)
   }
 
-  // chatId => songId
-  rightAnswers = make(map[int64]*Song)
-  usersScoresByChats = make(map[int64](map[int]UserScore))
-  rightAnswerMessageIdByChannels := make(map[int64]int)
-  activeQuestionMessageIdByChats := make(map[int64]int)
+  rightAnswersByInlineMessages = make(map[string]*Song)
+  usersScoresByInlineMessages = make(map[string](map[int]UserScore))
+  genresByInlineMessages = make(map[string]string)
 
-  genre = "alternative_rock"
-
-  //bot.Debug = true
-
+  bot.Debug = true
 
   log.Printf("Authorized on account %s", bot.Self.UserName)
 
@@ -69,98 +69,159 @@ func main() {
 
   for update := range updates {
 
+    if update.InlineQuery != nil {
+      sendAnswerForInlineQuery(bot, update.InlineQuery.ID)
+    }
+
     if update.CallbackQuery != nil {
 
-      chatId := update.CallbackQuery.Message.Chat.ID
+      //log.Printf("CallbackQuery: %v", update.CallbackQuery)
 
-      activeQuestionMessageId, ok := activeQuestionMessageIdByChats[chatId]
-      if !ok || activeQuestionMessageId != update.CallbackQuery.Message.MessageID {
-        log.Printf("Answer is on expired message")
-        continue
-      }
+      if update.CallbackQuery.Message == nil {
 
-      answerId, err := strconv.Atoi(update.CallbackQuery.Data)
-      rightAnswerSong, ok := rightAnswers[chatId]; 
-      if !ok || err != nil {
-        continue
-      }
+        inlineMessageId := update.CallbackQuery.InlineMessageID
 
-      user := update.CallbackQuery.From
+        if strings.HasPrefix(update.CallbackQuery.Data, "play_") {
 
-      if answerId == rightAnswerSong.ID {
-        answerConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "You are right")
-        bot.AnswerCallbackQuery(answerConfig)
+          genre := strings.Replace(update.CallbackQuery.Data, "play_", "", 1)
+          log.Printf("Start game with genre = %s", genre)
+          genresByInlineMessages[inlineMessageId] = genre
 
-        increaseScore(chatId, user)
+          err := sendNextQuestion(conn, bot, inlineMessageId, "")
+          if err != nil {
+            log.Panic(err)
+            continue
+          }
 
-        rightAnswerEditMessageId, ok := rightAnswerMessageIdByChannels[chatId]
-        if ok {
-            editMessageWithRightAnswer := makeEditMessageWithRightAnswer(chatId, rightAnswerEditMessageId, user, rightAnswerSong)
-            bot.Send(editMessageWithRightAnswer)
         } else {
-            messageWithRightAnswer := makeMessageWithRightAnswer(chatId, user, rightAnswerSong)
-            sentMessage, _ := bot.Send(messageWithRightAnswer)
-            rightAnswerMessageIdByChannels[chatId] = sentMessage.MessageID
+          
+
+          userAnswerSongId, err := strconv.Atoi(update.CallbackQuery.Data)
+          if err != nil || userAnswerSongId == 0 {
+            log.Printf("Can't parse user's answer")
+            continue
+          }
+
+          rightAnswerSong, ok := rightAnswersByInlineMessages[inlineMessageId]
+          if !ok {
+            log.Printf("Can't get the right answer")
+            continue
+          }
+
+          user := update.CallbackQuery.From
+
+          var responseToUserText string
+          if rightAnswerSong.ID == userAnswerSongId {
+            responseToUserText = "You are right!"
+            increaseScore(inlineMessageId, user)
+          } else {
+            responseToUserText = "That is the wrong answer"
+            decreaseScore(inlineMessageId, user)
+          }
+          callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, responseToUserText)
+          bot.AnswerCallbackQuery(callbackConfig)
+
+
+          if rightAnswerSong.ID == userAnswerSongId {
+            prefixText := "The right answer was\n*" + rightAnswerSong.Artist + " - " + rightAnswerSong.Title + "*.\n"
+            prefixText += "*" + getUserFullName(user) + "* was the first!\n\n"
+            
+            usersScores, ok := usersScoresByInlineMessages[inlineMessageId]
+            if ok {
+              prefixText += getTextWithHighScores(usersScores) + "\n"
+            }
+
+            prefixText += "Ok. Now the next question.\n"
+            
+            err = sendNextQuestion(conn, bot, inlineMessageId, prefixText)
+            if err != nil {
+              log.Panic(err)
+              continue
+            }
+          }
         }
 
-        song, err := getNextSong(conn)
-        if err != nil {
-          log.Panic(err)
-          continue
-        }
-
-        onNewSong(chatId, &song)
-
-        editMessageTextConfig, editMessageMarkupConfig := makeEditMessagesWithSong(chatId, update.CallbackQuery.Message.MessageID, song)
-        bot.Send(editMessageTextConfig)
-        bot.Send(editMessageMarkupConfig)
-      } else {
-        answerConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "That is the wrong answer")
-        bot.AnswerCallbackQuery(answerConfig)
-
-        decreaseScore(chatId, user)
-      }
-
-      continue
-    }
-
-    if update.Message == nil {
-      continue
-    }
-
-    log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
-
-    if update.Message.Text == "/play" || update.Message.Text == "/start" || update.Message.Text == "/play@GuessSongBot" {
-      delete(rightAnswerMessageIdByChannels, update.Message.Chat.ID)
-
-      song, err := getNextSong(conn)
-      if err != nil {
-        log.Panic(err)
         continue
       }
-
-      onNewSong(update.Message.Chat.ID, &song)
-
-      message := makeMessageWithSong(update.Message.Chat.ID, song)
-      questionMessageSent, _ := bot.Send(message)
-      activeQuestionMessageIdByChats[update.Message.Chat.ID] = questionMessageSent.MessageID
     }
 
-    if update.Message.Text == "/top" || update.Message.Text == "/top@GuessSongBot" {
-      chatId := update.Message.Chat.ID
-      usersScores, ok := usersScoresByChats[chatId]
-      if ok {
-          message := tgbotapi.NewMessage(chatId, getTextWithHighScores(usersScores, update.Message.From))
-          bot.Send(message)
-      } else {
-          message := tgbotapi.NewMessage(chatId, "No scores in this chat")
-          bot.Send(message)
+    if update.Message != nil && update.Message.Chat != nil {
+      incomingText := update.Message.Text
+      if strings.HasPrefix(incomingText, "/start") || strings.HasPrefix(incomingText, "/help") {
+        message := tgbotapi.NewMessage(update.Message.Chat.ID, "Use this bot in the inline mode. Type @GuessSongBot in any other chat and choose an option from the popup.")
+        bot.Send(message)
       }
     }
   }
 }
 
-func getNextSong(connect *sqlx.DB) (song Song, err error) {
+func sendAnswerForInlineQuery(bot *tgbotapi.BotAPI, inlineQueryId string) {
+  description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point.";
+  inlineResult := tgbotapi.NewInlineQueryResultArticle("alternative_rock", "Play the game with Alternative Rock", description + " Genre = Alternative Rock")
+  keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{tgbotapi.NewInlineKeyboardButtonData("Start", "play_alternative_rock")})
+  inlineResult.ReplyMarkup = &keyboard
+
+  inlineResult2 := tgbotapi.NewInlineQueryResultArticle("russian_pop", "Play the game with Russian Pop", description + " Genre = Russian Pop")
+  keyboard2 := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{tgbotapi.NewInlineKeyboardButtonData("Start", "play_russian_pop")})
+  inlineResult2.ReplyMarkup = &keyboard2
+
+  inlineResults := []tgbotapi.InlineQueryResultArticle{inlineResult, inlineResult2}
+
+  // convert to slice of interfaces
+  inlineResultsInterfaces := make([]interface{}, len(inlineResults))
+  for i, v := range inlineResults {
+    inlineResultsInterfaces[i] = v
+  }
+
+  inlineConfig := tgbotapi.InlineConfig{}
+  inlineConfig.InlineQueryID = inlineQueryId
+  inlineConfig.Results = inlineResultsInterfaces
+  bot.AnswerInlineQuery(inlineConfig)
+}
+
+func getUserFullName(u *tgbotapi.User) string {
+  name := u.FirstName
+  if u.LastName != "" {
+    name += " " + u.LastName
+  }
+
+  if name == "" && u.UserName != "" {
+    return u.UserName
+  }
+
+  return name
+}
+
+func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId string, prefixText string) error {
+  genre, ok := genresByInlineMessages[inlineMessageId]
+  if !ok {
+    genre = defaultGenre
+  }
+
+  song, err := getNextSong(connect, genre)
+  if err != nil {
+    return err
+  }
+  rightAnswersByInlineMessages[inlineMessageId] = &song
+
+  text := prefixText
+  text = text + getQuestionTextWithSong(&song)
+  keyboardMarkup := getKeyboardMarkup(&song)
+
+  editConfig := tgbotapi.EditMessageTextConfig {
+    BaseEdit: tgbotapi.BaseEdit{
+      InlineMessageID: inlineMessageId,
+      ReplyMarkup: &keyboardMarkup,
+    },
+    Text: text,
+    ParseMode: "markdown",
+  }
+
+  bot.Send(editConfig)
+  return nil
+}
+
+func getNextSong(connect *sqlx.DB, genre string) (song Song, err error) {
   songs := []Song{}
   err = connect.Select(&songs, "SELECT * FROM songs WHERE lang = (SELECT lang FROM songs WHERE genre = ? ORDER BY RAND() LIMIT 1) AND genre = ? ORDER BY RAND() LIMIT 6", genre, genre)
   if err != nil {
@@ -179,7 +240,7 @@ func getNextSong(connect *sqlx.DB) (song Song, err error) {
   return song, nil
 }
 
-func getKeyboardMarkUp(song Song) (keyboard tgbotapi.InlineKeyboardMarkup) {
+func getKeyboardMarkup(song *Song) (keyboard tgbotapi.InlineKeyboardMarkup) {
     rows := [][]tgbotapi.InlineKeyboardButton{};
     for _, optionSong := range song.Options {
         button := tgbotapi.NewInlineKeyboardButtonData(optionSong.Artist + " - " + optionSong.Title, strconv.Itoa(optionSong.ID))
@@ -190,69 +251,42 @@ func getKeyboardMarkUp(song Song) (keyboard tgbotapi.InlineKeyboardMarkup) {
     return keyboard
 }
 
-func makeMessageWithSong(chatId int64, song Song) (message tgbotapi.MessageConfig) {
-    message = tgbotapi.NewMessage(chatId, song.Lyrics)
-    message.ReplyMarkup = getKeyboardMarkUp(song)
-    return message
+
+func getQuestionTextWithSong(song *Song) (string) {
+    text := "_Who sings the following text?_\n\n" + song.Lyrics
+    return text
 }
 
-func makeEditMessagesWithSong(chatId int64, editMessageId int, song Song) (editMessage tgbotapi.EditMessageTextConfig, editMessageMarkup tgbotapi.EditMessageReplyMarkupConfig) {
-    editMessage = tgbotapi.NewEditMessageText(chatId, editMessageId, song.Lyrics)
-    editMessageMarkup = tgbotapi.NewEditMessageReplyMarkup(chatId, editMessageId, getKeyboardMarkUp(song))
-    return
-}
-
-func onNewSong(chatId int64, song *Song) {
-    rightAnswers[chatId] = song
-}
-
-func increaseScore(chatId int64, user *tgbotapi.User) {
-    userScore := getUserScore(chatId, user)
+func increaseScore(inlineMessageId string, user *tgbotapi.User) {
+    userScore := getUserScore(inlineMessageId, user)
     userScore.Score += 1
-    usersScoresByChats[chatId][user.ID] = userScore
+    usersScoresByInlineMessages[inlineMessageId][user.ID] = userScore
 }
 
-func decreaseScore(chatId int64, user *tgbotapi.User) {
-    userScore := getUserScore(chatId, user)
+func decreaseScore(inlineMessageId string, user *tgbotapi.User) {
+    userScore := getUserScore(inlineMessageId, user)
     userScore.Score -= 1
-    usersScoresByChats[chatId][user.ID] = userScore
+    usersScoresByInlineMessages[inlineMessageId][user.ID] = userScore
 }
 
-func getUserScore(chatId int64, user *tgbotapi.User) UserScore {
-    _, ok := usersScoresByChats[chatId]
+func getUserScore(inlineMessageId string, user *tgbotapi.User) UserScore {
+    _, ok := usersScoresByInlineMessages[inlineMessageId]
     if !ok {
-       usersScoresByChats[chatId] = make(map[int]UserScore)
+       usersScoresByInlineMessages[inlineMessageId] = make(map[int]UserScore)
     }
-    userScore, okByUser := usersScoresByChats[chatId][user.ID]
+    userScore, okByUser := usersScoresByInlineMessages[inlineMessageId][user.ID]
     if !okByUser {
       userScore = UserScore{user, 0}
-      usersScoresByChats[chatId][user.ID] = userScore
+      usersScoresByInlineMessages[inlineMessageId][user.ID] = userScore
     }
     return userScore
 }
 
-func getMessageTextWithRightAnswer(chatId int64, user *tgbotapi.User, song *Song) string {
-  userScore := getUserScore(chatId, user)
-  return "The right answer is *" + song.Artist + " - " + song.Title + "*\nThe first was *" + user.String() + "* (" + strconv.Itoa(userScore.Score) + ")"
-}
-
-func makeMessageWithRightAnswer(chatId int64, user *tgbotapi.User, song *Song) (message tgbotapi.MessageConfig) {
-  message = tgbotapi.NewMessage(chatId, getMessageTextWithRightAnswer(chatId, user, song))
-  message.ParseMode = "markdown"
-  return message
-}
-
-func makeEditMessageWithRightAnswer(chatId int64, editMessageId int, user *tgbotapi.User, song *Song) (editMessage tgbotapi.EditMessageTextConfig) {
-  editMessage = tgbotapi.NewEditMessageText(chatId, editMessageId, getMessageTextWithRightAnswer(chatId, user, song))
-  editMessage.ParseMode = "markdown"
-  return editMessage
-}
-
-func getTextWithHighScores(usersScores map[int]UserScore, user *tgbotapi.User) string {
+func getTextWithHighScores(usersScores map[int]UserScore) string {
   scorePairs := orderByScoresDesc(usersScores)
-  text := "Top:\n"
+  text := "Current Top:\n"
   for i, scorePair := range scorePairs {
-    text += strconv.Itoa(i + 1) + ". " + scorePair.Value.User.String() + ": " + strconv.Itoa(scorePair.Value.Score) + "\n"
+    text += strconv.Itoa(i + 1) + ". " + getUserFullName(scorePair.Value.User) + ": " + strconv.Itoa(scorePair.Value.Score) + "\n"
     if (i > 10) {
       break
     }
