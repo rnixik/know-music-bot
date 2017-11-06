@@ -154,11 +154,11 @@ func main() {
 
 func sendAnswerForInlineQuery(bot *tgbotapi.BotAPI, inlineQueryId string) {
 	description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point."
-	inlineResult := tgbotapi.NewInlineQueryResultArticle("alternative_rock", "Play the game with Alternative Rock", description+" Genre = Alternative Rock")
+	inlineResult := tgbotapi.NewInlineQueryResultArticle("alternative_rock", "Play the game with Alternative Rock", description+" Genre = Alternative Rock (not only).")
 	keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{tgbotapi.NewInlineKeyboardButtonData("Start", "play_alternative_rock")})
 	inlineResult.ReplyMarkup = &keyboard
 
-	inlineResult2 := tgbotapi.NewInlineQueryResultArticle("russian_pop", "Play the game with Russian Pop", description+" Genre = Russian Pop")
+	inlineResult2 := tgbotapi.NewInlineQueryResultArticle("russian_pop", "Play the game with Russian Pop", description+" Genre = Russian Pop (not only).")
 	keyboard2 := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{tgbotapi.NewInlineKeyboardButtonData("Start", "play_russian_pop")})
 	inlineResult2.ReplyMarkup = &keyboard2
 
