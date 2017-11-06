@@ -220,7 +220,7 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 
 func getNextSong(connect *sqlx.DB, genre string) (song Song, err error) {
 	songs := []Song{}
-	err = connect.Select(&songs, "SELECT * FROM songs WHERE lang = (SELECT lang FROM songs WHERE genre = ? ORDER BY RAND() LIMIT 1) AND genre = ? ORDER BY RAND() LIMIT 6", genre, genre)
+	err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang, genre FROM songs WHERE genre = ? ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang AND songs.genre = fs.genre ORDER BY RAND() LIMIT 6", genre)
 	if err != nil {
 		return
 	}
