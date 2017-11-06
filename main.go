@@ -57,7 +57,7 @@ func main() {
 	usersScoresByInlineMessages = make(map[string](map[int]UserScore))
 	genresByInlineMessages = make(map[string]string)
 
-	bot.Debug = true
+	//bot.Debug = true
 
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
