@@ -118,7 +118,6 @@ func main() {
 					} else {
 						responseToUserText = "That is the wrong answer"
 						decreaseScore(inlineMessageId, user)
-						fmt.Printf("Wrong Answer %d != %d (%s)", userAnswerSongId, rightAnswerSong.ID, rightAnswerSong.Title)
 					}
 					callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, responseToUserText)
 					bot.AnswerCallbackQuery(callbackConfig)
