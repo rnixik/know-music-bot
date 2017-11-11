@@ -1,7 +1,7 @@
 (function() {
 
 	var lastTimeout = 0;
-	var lastArtistIndex = 49;
+	var lastArtistIndex = -1;
 	var rows = [];
 	var maxArtists = 100;
 	var maxTitles = 5;

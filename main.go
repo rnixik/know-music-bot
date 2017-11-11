@@ -118,6 +118,7 @@ func main() {
 					} else {
 						responseToUserText = "That is the wrong answer"
 						decreaseScore(inlineMessageId, user)
+						fmt.Printf("Wrong Answer %d != %d (%s)", userAnswerSongId, rightAnswerSong.ID, rightAnswerSong.Title)
 					}
 					callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, responseToUserText)
 					bot.AnswerCallbackQuery(callbackConfig)
@@ -211,6 +212,7 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 
 	song, err := getNextSong(connect, genre)
 	if err != nil {
+		fmt.Printf("Can't get next song for genre = %s", genre)
 		return err
 	}
 	rightAnswersByInlineMessages[inlineMessageId] = song
@@ -228,13 +230,13 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 		ParseMode: "markdown",
 	}
 
-	bot.Send(editConfig)
-	return nil
+	_, err = bot.Send(editConfig)
+	return err
 }
 
 func getNextSong(connect *sqlx.DB, genre string) (song *Song, err error) {
 	songs := []Song{}
-	err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang, genre FROM songs WHERE genre = ? ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang AND songs.genre = fs.genre ORDER BY RAND() LIMIT 6", genre)
+	err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang, genre FROM songs WHERE genre = ? ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang AND songs.genre = fs.genre ORDER BY RAND() LIMIT 5", genre)
 	if err != nil {
 		return
 	}
@@ -243,14 +245,10 @@ func getNextSong(connect *sqlx.DB, genre string) (song *Song, err error) {
 		return nil, fmt.Errorf("Songs not found by genre = %s", genre)
 	}
 
-	song = &songs[0]
+	rainInd := rand.Intn(len(songs))
 
-	// randomize
-	for i := range songs {
-		j := rand.Intn(i + 1)
-		songs[i], songs[j] = songs[j], songs[i]
-	}
-	song.Options = songs[0:5]
+	song = &songs[rainInd]
+	song.Options = songs
 
 	return song, nil
 }
