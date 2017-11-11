@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/joho/godotenv"
@@ -53,6 +54,8 @@ func main() {
 		log.Panic(err)
 	}
 
+	adminUserId := os.Getenv("ADMIN_USER_ID")
+
 	rightAnswersByInlineMessages = make(map[string]*Song)
 	usersScoresByInlineMessages = make(map[string](map[int]UserScore))
 	genresByInlineMessages = make(map[string]string)
@@ -83,12 +86,12 @@ func main() {
 				if strings.HasPrefix(update.CallbackQuery.Data, "play_") {
 
 					genre := strings.Replace(update.CallbackQuery.Data, "play_", "", 1)
-					log.Printf("Start game with genre = %s", genre)
+					log.Printf("%s: Start game with genre = %s", update.CallbackQuery.From.UserName, genre)
 					genresByInlineMessages[inlineMessageId] = genre
 
 					err := sendNextQuestion(conn, bot, inlineMessageId, "")
 					if err != nil {
-						log.Panic(err)
+						log.Println(err)
 						continue
 					}
 
@@ -125,14 +128,14 @@ func main() {
 
 						usersScores, ok := usersScoresByInlineMessages[inlineMessageId]
 						if ok {
-							prefixText += getTextWithHighScores(usersScores) + "\n"
+							prefixText += "Current Top:\n" + getTextWithHighScores(usersScores) + "\n"
 						}
 
 						prefixText += "Ok. Now the next question.\n"
 
 						err = sendNextQuestion(conn, bot, inlineMessageId, prefixText)
 						if err != nil {
-							log.Panic(err)
+							log.Println(err)
 							continue
 						}
 					}
@@ -147,22 +150,33 @@ func main() {
 			if strings.HasPrefix(incomingText, "/start") || strings.HasPrefix(incomingText, "/help") {
 				message := tgbotapi.NewMessage(update.Message.Chat.ID, "Use this bot in the inline mode. Type @GuessSongBot in any other chat and choose an option from the popup.")
 				bot.Send(message)
+				continue
 			}
+
+			if strings.HasPrefix(incomingText, "/top") && strconv.Itoa(update.Message.From.ID) == adminUserId {
+				sendTop(bot, update.Message.Chat.ID)
+				continue
+			}
+
 		}
 	}
 }
 
 func sendAnswerForInlineQuery(bot *tgbotapi.BotAPI, inlineQueryId string) {
-	description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point."
-	inlineResult := tgbotapi.NewInlineQueryResultArticle("alternative_rock", "Play the game with Alternative Rock", description+" Genre = Alternative Rock (not only).")
-	keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{tgbotapi.NewInlineKeyboardButtonData("Start", "play_alternative_rock")})
-	inlineResult.ReplyMarkup = &keyboard
+	genres := map[string]string{}
+	genres["alternative_rock"] = "Alternative Rock"
+	genres["rusrock"] = "Русский рок"
+	genres["rusrap"] = "Русский рэп"
 
-	inlineResult2 := tgbotapi.NewInlineQueryResultArticle("russian_pop", "Play the game with Russian Pop", description+" Genre = Russian Pop (not only).")
-	keyboard2 := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{tgbotapi.NewInlineKeyboardButtonData("Start", "play_russian_pop")})
-	inlineResult2.ReplyMarkup = &keyboard2
+	description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point. Playlist contains top 100 performers from YM by genre."
 
-	inlineResults := []tgbotapi.InlineQueryResultArticle{inlineResult, inlineResult2}
+	inlineResults := []tgbotapi.InlineQueryResultArticle{}
+	for genreKey, genreDescription := range genres {
+		inlineResult := tgbotapi.NewInlineQueryResultArticle(genreKey, "Play the game with "+genreDescription, description+" Genre = "+genreDescription+".")
+		keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{tgbotapi.NewInlineKeyboardButtonData("Start", "play_"+genreKey)})
+		inlineResult.ReplyMarkup = &keyboard
+		inlineResults = append(inlineResults, inlineResult)
+	}
 
 	// convert to slice of interfaces
 	inlineResultsInterfaces := make([]interface{}, len(inlineResults))
@@ -199,11 +213,11 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 	if err != nil {
 		return err
 	}
-	rightAnswersByInlineMessages[inlineMessageId] = &song
+	rightAnswersByInlineMessages[inlineMessageId] = song
 
 	text := prefixText
-	text = text + getQuestionTextWithSong(&song)
-	keyboardMarkup := getKeyboardMarkup(&song)
+	text = text + getQuestionTextWithSong(song)
+	keyboardMarkup := getKeyboardMarkup(song)
 
 	editConfig := tgbotapi.EditMessageTextConfig{
 		BaseEdit: tgbotapi.BaseEdit{
@@ -218,21 +232,25 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 	return nil
 }
 
-func getNextSong(connect *sqlx.DB, genre string) (song Song, err error) {
+func getNextSong(connect *sqlx.DB, genre string) (song *Song, err error) {
 	songs := []Song{}
 	err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang, genre FROM songs WHERE genre = ? ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang AND songs.genre = fs.genre ORDER BY RAND() LIMIT 6", genre)
 	if err != nil {
 		return
 	}
 
-	song = songs[0]
-	song.Options = songs[0:5]
+	if len(songs) == 0 {
+		return nil, fmt.Errorf("Songs not found by genre = %s", genre)
+	}
+
+	song = &songs[0]
 
 	// randomize
-	for i := range song.Options {
+	for i := range songs {
 		j := rand.Intn(i + 1)
-		song.Options[i], song.Options[j] = song.Options[j], song.Options[i]
+		songs[i], songs[j] = songs[j], songs[i]
 	}
+	song.Options = songs[0:5]
 
 	return song, nil
 }
@@ -280,7 +298,7 @@ func getUserScore(inlineMessageId string, user *tgbotapi.User) UserScore {
 
 func getTextWithHighScores(usersScores map[int]UserScore) string {
 	scorePairs := orderByScoresDesc(usersScores)
-	text := "Current Top:\n"
+	text := ""
 	for i, scorePair := range scorePairs {
 		text += strconv.Itoa(i+1) + ". " + getUserFullName(scorePair.Value.User) + ": " + strconv.Itoa(scorePair.Value.Score) + "\n"
 		if i > 10 {
@@ -314,3 +332,15 @@ func (p ScorePairList) Less(i, j int) bool { return p[i].Value.Score < p[j].Valu
 func (p ScorePairList) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
 // end of sort
+
+func sendTop(bot *tgbotapi.BotAPI, chatId int64) {
+	text := ""
+	for _, usersScore := range usersScoresByInlineMessages {
+		text += getTextWithHighScores(usersScore) + "\n\n"
+	}
+	if text == "" {
+		text = "No top"
+	}
+	message := tgbotapi.NewMessage(chatId, text)
+	bot.Send(message)
+}
