@@ -26,6 +26,11 @@ type Song struct {
 	Options     []Song
 }
 
+type DbCountInfo struct {
+	Field string `db:"f"`
+	Count string `db:"cnt"`
+}
+
 type UserScore struct {
 	User  *tgbotapi.User
 	Score int
@@ -70,6 +75,11 @@ func main() {
 	rightAnswersByInlineMessages = make(map[string]*Song)
 	usersScoresByInlineMessages = make(map[string](map[int]UserScore))
 	genresByInlineMessages = make(map[string]string)
+
+	infoText, errInfo := getSongsInfo(conn)
+	if errInfo != nil {
+		log.Printf("Can't get songs info: %v", errInfo)
+	}
 
 	//bot.Debug = true
 
@@ -166,6 +176,12 @@ func main() {
 
 			if strings.HasPrefix(incomingText, "/top") && strconv.Itoa(update.Message.From.ID) == adminUserId {
 				sendTop(bot, update.Message.Chat.ID)
+				continue
+			}
+
+			if strings.HasPrefix(incomingText, "/info") {
+				message := tgbotapi.NewMessage(update.Message.Chat.ID, infoText)
+				bot.Send(message)
 				continue
 			}
 
@@ -351,4 +367,21 @@ func sendTop(bot *tgbotapi.BotAPI, chatId int64) {
 	}
 	message := tgbotapi.NewMessage(chatId, text)
 	bot.Send(message)
+}
+
+func getSongsInfo(connect *sqlx.DB) (infoText string, err error) {
+	genreTracks := []DbCountInfo{}
+	err = connect.Select(&genreTracks, "SELECT source_genre AS f, COUNT(1) AS cnt FROM songs GROUP BY source_genre")
+	genreArtists := []DbCountInfo{}
+	err = connect.Select(&genreArtists, "SELECT source_genre AS f, COUNT(DISTINCT artist) AS cnt FROM songs GROUP BY source_genre")
+	infoText = "Tracks by genre:\n"
+	for _, cntInfoTracks := range genreTracks {
+		infoText += cntInfoTracks.Field + " - " + cntInfoTracks.Count + "\n"
+	}
+
+	infoText += "\nArtists by genre:\n"
+	for _, cntInfoTracks := range genreArtists {
+		infoText += cntInfoTracks.Field + " - " + cntInfoTracks.Count + "\n"
+	}
+	return
 }
