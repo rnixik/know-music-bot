@@ -5,9 +5,11 @@ CREATE TABLE `songs` (
 	`lyrics` TEXT NOT NULL,
 	`lang` VARCHAR(255) NULL DEFAULT 'en',
 	`genre` VARCHAR(255) NULL DEFAULT 'alternative_rock',
+	`source_genre` VARCHAR(255) NULL DEFAULT 'alternative_rock',
 	PRIMARY KEY (`id`),
 	INDEX `lang` (`lang`),
-	INDEX `genre` (`genre`)
+	INDEX `genre` (`genre`),
+	INDEX `source_genre` (`source_genre`)
 )
 COLLATE='utf8_general_ci'
 ENGINE=InnoDB;

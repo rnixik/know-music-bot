@@ -5,6 +5,7 @@
 	var rows = [];
 	var maxArtists = 100;
 	var maxTitles = 5;
+	var sourceGenre = 'classicmetal';
 
 	var mainIntervalId = setInterval(function() {
 	    lastArtistIndex++;
@@ -100,7 +101,7 @@
 		    return;
 		}
 
-		var sql = "INSERT INTO `songs` (`artist`, `title`, `lyrics`, `lang`, `genre`) VALUES ('" + artist + "', '" + title + "', '" + lyrics + "', '" + lang + "', '" + genre + "');";
+		var sql = "INSERT INTO `songs` (`artist`, `title`, `lyrics`, `lang`, `genre`, `source_genre`) VALUES ('" + artist + "', '" + title + "', '" + lyrics + "', '" + lang + "', '" + genre + "', '" + sourceGenre + "');";
 		console.log(sql);
 		rows.push(sql);
 		prevTitle = title;

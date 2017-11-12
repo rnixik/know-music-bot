@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/go-ini/ini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/joho/godotenv"
@@ -15,13 +16,14 @@ import (
 )
 
 type Song struct {
-	ID      int    `db:"id"`
-	Title   string `db:"title"`
-	Artist  string `db:"artist"`
-	Lyrics  string `db:"lyrics"`
-	Lang    string `db:"lang"`
-	Genre   string `db:"genre"`
-	Options []Song
+	ID          int    `db:"id"`
+	Title       string `db:"title"`
+	Artist      string `db:"artist"`
+	Lyrics      string `db:"lyrics"`
+	Lang        string `db:"lang"`
+	Genre       string `db:"genre"`
+	SourceGenre string `db:"source_genre"`
+	Options     []Song
 }
 
 type UserScore struct {
@@ -31,11 +33,14 @@ type UserScore struct {
 
 const (
 	defaultGenre = "alternative_rock"
+	anyGenre     = "any"
 )
 
 var rightAnswersByInlineMessages map[string]*Song
 var usersScoresByInlineMessages map[string](map[int]UserScore)
 var genresByInlineMessages map[string]string
+
+var genres map[string]string
 
 func main() {
 
@@ -53,6 +58,12 @@ func main() {
 	if err != nil {
 		log.Panic(err)
 	}
+
+	genresIni, err := ini.Load("genres.ini")
+	if err != nil {
+		log.Fatal("Error loading genres.ini file")
+	}
+	genres = genresIni.Section("").KeysHash()
 
 	adminUserId := os.Getenv("ADMIN_USER_ID")
 
@@ -163,11 +174,6 @@ func main() {
 }
 
 func sendAnswerForInlineQuery(bot *tgbotapi.BotAPI, inlineQueryId string) {
-	genres := map[string]string{}
-	genres["alternative_rock"] = "Alternative Rock"
-	genres["rusrock"] = "Русский рок"
-	genres["rusrap"] = "Русский рэп"
-
 	description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point. Playlist contains top 100 performers from YM by genre."
 
 	inlineResults := []tgbotapi.InlineQueryResultArticle{}
@@ -235,7 +241,12 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 
 func getNextSong(connect *sqlx.DB, genre string) (song *Song, err error) {
 	songs := []Song{}
-	err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang, genre FROM songs WHERE genre = ? ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang AND songs.genre = fs.genre ORDER BY RAND() LIMIT 5", genre)
+
+	if genre == anyGenre {
+		err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang FROM songs ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang ORDER BY RAND() LIMIT 5")
+	} else {
+		err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang, source_genre FROM songs WHERE source_genre = ? ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang AND songs.source_genre = fs.source_genre ORDER BY RAND() LIMIT 5", genre)
+	}
 	if err != nil {
 		return
 	}
