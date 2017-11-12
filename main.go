@@ -126,7 +126,13 @@ func main() {
 
 					rightAnswerSong, ok := rightAnswersByInlineMessages[inlineMessageId]
 					if !ok {
-						log.Printf("Can't get the right answer")
+						editOutdatedConfig := tgbotapi.EditMessageTextConfig{
+							BaseEdit: tgbotapi.BaseEdit{
+								InlineMessageID: inlineMessageId,
+							},
+							Text: "Sorry, the bot was restarted. Please, start a new game.",
+						}
+						bot.Send(editOutdatedConfig)
 						continue
 					}
 
