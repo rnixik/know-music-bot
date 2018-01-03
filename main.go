@@ -39,6 +39,7 @@ type UserScore struct {
 const (
 	defaultGenre = "alternative_rock"
 	anyGenre     = "any"
+	maxScore     = 5
 )
 
 var rightAnswersByInlineMessages map[string]*Song
@@ -150,12 +151,19 @@ func main() {
 					bot.AnswerCallbackQuery(callbackConfig)
 
 					if rightAnswerSong.ID == userAnswerSongId {
+						hasWinner := checkWinner(bot, inlineMessageId, user)
+						if hasWinner {
+							continue
+						}
+					}
+
+					if rightAnswerSong.ID == userAnswerSongId {
 						prefixText := "The right answer was\n*" + rightAnswerSong.Artist + " - " + rightAnswerSong.Title + "*.\n"
 						prefixText += "*" + getUserFullName(user) + "* was the first!\n\n"
 
 						usersScores, ok := usersScoresByInlineMessages[inlineMessageId]
 						if ok {
-							prefixText += "Current Top:\n" + getTextWithHighScores(usersScores) + "\n"
+							prefixText += "Current Top (limit " + strconv.Itoa(maxScore) + "):\n" + getTextWithHighScores(usersScores) + "\n"
 						}
 
 						prefixText += "Ok. Now the next question.\n"
@@ -196,7 +204,7 @@ func main() {
 }
 
 func sendAnswerForInlineQuery(bot *tgbotapi.BotAPI, inlineQueryId string) {
-	description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point. Playlist contains top 100 performers from YM by genre."
+	description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point. The first player with " + strconv.Itoa(maxScore) + " points is the winner. Playlist contains top 100 performers from YM by genre."
 
 	inlineResults := []tgbotapi.InlineQueryResultArticle{}
 	for genreKey, genreDescription := range genres {
@@ -311,6 +319,31 @@ func decreaseScore(inlineMessageId string, user *tgbotapi.User) {
 	userScore := getUserScore(inlineMessageId, user)
 	userScore.Score -= 1
 	usersScoresByInlineMessages[inlineMessageId][user.ID] = userScore
+}
+
+func checkWinner(bot *tgbotapi.BotAPI, inlineMessageId string, user *tgbotapi.User) bool {
+	userScore := getUserScore(inlineMessageId, user)
+	if userScore.Score >= maxScore {
+		text := "We have a winner - *" + getUserFullName(user) + "*!\nHe's got " + strconv.Itoa(userScore.Score) + " points.\n\n"
+
+		usersScores, ok := usersScoresByInlineMessages[inlineMessageId]
+		if ok {
+			text += "Current Top:\n" + getTextWithHighScores(usersScores) + "\n"
+		}
+		text += "\nThis game is over."
+
+		editConfig := tgbotapi.EditMessageTextConfig{
+			BaseEdit: tgbotapi.BaseEdit{
+				InlineMessageID: inlineMessageId,
+			},
+			Text:      text,
+			ParseMode: "markdown",
+		}
+
+		bot.Send(editConfig)
+		return true
+	}
+	return false
 }
 
 func getUserScore(inlineMessageId string, user *tgbotapi.User) UserScore {
