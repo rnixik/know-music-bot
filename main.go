@@ -6,24 +6,23 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/joho/godotenv"
+	"golang.org/x/net/proxy"
 	"gopkg.in/telegram-bot-api.v4"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-type Song struct {
-	ID          int    `db:"id"`
-	Title       string `db:"title"`
-	Artist      string `db:"artist"`
-	Lyrics      string `db:"lyrics"`
-	Lang        string `db:"lang"`
-	Genre       string `db:"genre"`
-	SourceGenre string `db:"source_genre"`
-	Options     []Song
+type Sound struct {
+	ID      int    `db:"id"`
+	Title   string `db:"title"`
+	FileID  string `db:"file_id"`
+	Genre   string `db:"genre"`
+	Options []Sound
 }
 
 type DbCountInfo struct {
@@ -37,12 +36,12 @@ type UserScore struct {
 }
 
 const (
-	defaultGenre = "alternative_rock"
+	defaultGenre = "any"
 	anyGenre     = "any"
-	maxScore     = 5
+	maxScore     = 7
 )
 
-var rightAnswersByInlineMessages map[string]*Song
+var rightAnswersByInlineMessages map[string]*Sound
 var usersScoresByInlineMessages map[string](map[int]UserScore)
 var genresByInlineMessages map[string]string
 
@@ -55,14 +54,33 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	conn, err := sqlx.Open("mysql", os.Getenv("DB_USER")+":"+os.Getenv("DB_PASS")+"@tcp(localhost:3306)/guess_song")
+	conn, err := sqlx.Open("mysql", os.Getenv("DB_USER")+":"+os.Getenv("DB_PASS")+"@tcp(localhost:3306)/"+os.Getenv("DB_NAME"))
 	if err != nil {
 		log.Panic(err)
 	}
 
-	bot, err := tgbotapi.NewBotAPI(os.Getenv("BOT_TOKEN"))
-	if err != nil {
-		log.Panic(err)
+	proxyAddr := os.Getenv("PROXY_ADDR")
+
+	var bot *tgbotapi.BotAPI
+
+	if len(proxyAddr) > 0 {
+		dialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+		if err != nil {
+			log.Panic(err)
+		}
+		httpTransport := &http.Transport{}
+		httpClient := &http.Client{Transport: httpTransport}
+		httpTransport.Dial = dialer.Dial
+
+		bot, err = tgbotapi.NewBotAPIWithClient(os.Getenv("BOT_TOKEN"), httpClient)
+		if err != nil {
+			log.Panic(err)
+		}
+	} else {
+		bot, err = tgbotapi.NewBotAPI(os.Getenv("BOT_TOKEN"))
+		if err != nil {
+			log.Panic(err)
+		}
 	}
 
 	genresIni, err := ini.Load("genres.ini")
@@ -73,16 +91,13 @@ func main() {
 
 	adminUserId := os.Getenv("ADMIN_USER_ID")
 
-	rightAnswersByInlineMessages = make(map[string]*Song)
+	rightAnswersByInlineMessages = make(map[string]*Sound)
 	usersScoresByInlineMessages = make(map[string](map[int]UserScore))
 	genresByInlineMessages = make(map[string]string)
 
-	infoText, errInfo := getSongsInfo(conn)
-	if errInfo != nil {
-		log.Printf("Can't get songs info: %v", errInfo)
+	if os.Getenv("BOT_DEBUG") == "true" {
+		bot.Debug = true
 	}
-
-	//bot.Debug = true
 
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
@@ -99,7 +114,7 @@ func main() {
 
 		if update.CallbackQuery != nil {
 
-			//log.Printf("CallbackQuery: %v", update.CallbackQuery)
+			log.Printf("CallbackQuery: %v", update.CallbackQuery)
 
 			if update.CallbackQuery.Message == nil {
 
@@ -119,13 +134,13 @@ func main() {
 
 				} else {
 
-					userAnswerSongId, err := strconv.Atoi(update.CallbackQuery.Data)
-					if err != nil || userAnswerSongId == 0 {
+					userAnswerSoundId, err := strconv.Atoi(update.CallbackQuery.Data)
+					if err != nil || userAnswerSoundId == 0 {
 						log.Printf("Can't parse user's answer")
 						continue
 					}
 
-					rightAnswerSong, ok := rightAnswersByInlineMessages[inlineMessageId]
+					rightAnswerSound, ok := rightAnswersByInlineMessages[inlineMessageId]
 					if !ok {
 						editOutdatedConfig := tgbotapi.EditMessageTextConfig{
 							BaseEdit: tgbotapi.BaseEdit{
@@ -140,7 +155,7 @@ func main() {
 					user := update.CallbackQuery.From
 
 					var responseToUserText string
-					if rightAnswerSong.ID == userAnswerSongId {
+					if rightAnswerSound.ID == userAnswerSoundId {
 						responseToUserText = "You are right!"
 						increaseScore(inlineMessageId, user)
 					} else {
@@ -150,15 +165,15 @@ func main() {
 					callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, responseToUserText)
 					bot.AnswerCallbackQuery(callbackConfig)
 
-					if rightAnswerSong.ID == userAnswerSongId {
+					if rightAnswerSound.ID == userAnswerSoundId {
 						hasWinner := checkWinner(bot, inlineMessageId, user)
 						if hasWinner {
 							continue
 						}
 					}
 
-					if rightAnswerSong.ID == userAnswerSongId {
-						prefixText := "The right answer was\n*" + rightAnswerSong.Artist + " - " + rightAnswerSong.Title + "*.\n"
+					if rightAnswerSound.ID == userAnswerSoundId {
+						prefixText := "The right answer was\n*" + rightAnswerSound.Title + "*.\n"
 						prefixText += "*" + getUserFullName(user) + "* was the first!\n\n"
 
 						usersScores, ok := usersScoresByInlineMessages[inlineMessageId]
@@ -182,8 +197,19 @@ func main() {
 
 		if update.Message != nil && update.Message.Chat != nil {
 			incomingText := update.Message.Text
+
+			if strings.HasPrefix(incomingText, "/start ") {
+				inlineMessageId := strings.Replace(incomingText, "/start ", "", 1)
+				rightAnswerSound, ok := rightAnswersByInlineMessages[inlineMessageId]
+				if ok {
+					audio := tgbotapi.NewAudioShare(update.Message.Chat.ID, rightAnswerSound.FileID)
+					bot.Send(audio)
+					continue
+				}
+			}
+
 			if strings.HasPrefix(incomingText, "/start") || strings.HasPrefix(incomingText, "/help") {
-				message := tgbotapi.NewMessage(update.Message.Chat.ID, "Use this bot in the inline mode. Type @GuessSongBot in any other chat and choose an option from the popup.")
+				message := tgbotapi.NewMessage(update.Message.Chat.ID, "Use this bot in the inline mode. Type @KnowMusicBot in any other chat and choose an option from the popup.")
 				bot.Send(message)
 				continue
 			}
@@ -193,18 +219,17 @@ func main() {
 				continue
 			}
 
-			if strings.HasPrefix(incomingText, "/info") {
-				message := tgbotapi.NewMessage(update.Message.Chat.ID, infoText)
+			if update.Message.Audio != nil {
+				message := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Audio.FileID)
+				message.BaseChat.ReplyToMessageID = update.Message.MessageID
 				bot.Send(message)
-				continue
 			}
-
 		}
 	}
 }
 
 func sendAnswerForInlineQuery(bot *tgbotapi.BotAPI, inlineQueryId string) {
-	description := "Bot shows lyrics from a random song and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point. The first player with " + strconv.Itoa(maxScore) + " points is the winner. Playlist contains top 100 performers from YM by genre."
+	description := "Bot sends part of soundtrack from a random game or film and provides 5 options of titles to answer. The first player who answers right gets +1 point. If player's answer is wrong, he gets -1 point. The first player with " + strconv.Itoa(maxScore) + " points is the winner."
 
 	inlineResults := []tgbotapi.InlineQueryResultArticle{}
 	for genreKey, genreDescription := range genres {
@@ -245,16 +270,16 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 		genre = defaultGenre
 	}
 
-	song, err := getNextSong(connect, genre)
+	sound, err := getNextSound(connect, genre)
 	if err != nil {
-		fmt.Printf("Can't get next song for genre = %s", genre)
+		fmt.Printf("Can't get next sound for genre = %s", genre)
 		return err
 	}
-	rightAnswersByInlineMessages[inlineMessageId] = song
+	rightAnswersByInlineMessages[inlineMessageId] = sound
 
 	text := prefixText
-	text = text + getQuestionTextWithSong(song)
-	keyboardMarkup := getKeyboardMarkup(song)
+	text = text + getQuestionTextWithSound(sound, inlineMessageId)
+	keyboardMarkup := getKeyboardMarkup(sound)
 
 	editConfig := tgbotapi.EditMessageTextConfig{
 		BaseEdit: tgbotapi.BaseEdit{
@@ -264,39 +289,39 @@ func sendNextQuestion(connect *sqlx.DB, bot *tgbotapi.BotAPI, inlineMessageId st
 		Text:      text,
 		ParseMode: "markdown",
 	}
-
 	_, err = bot.Send(editConfig)
+
 	return err
 }
 
-func getNextSong(connect *sqlx.DB, genre string) (song *Song, err error) {
-	songs := []Song{}
+func getNextSound(connect *sqlx.DB, genre string) (sound *Sound, err error) {
+	sounds := []Sound{}
 
 	if genre == anyGenre {
-		err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang FROM songs ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang ORDER BY RAND() LIMIT 5")
+		err = connect.Select(&sounds, "SELECT sounds.* FROM sounds ORDER BY RAND() LIMIT 5")
 	} else {
-		err = connect.Select(&songs, "SELECT songs.* FROM songs INNER JOIN (SELECT lang, source_genre FROM songs WHERE source_genre = ? ORDER BY RAND() LIMIT 1) AS fs ON fs.lang = songs.lang AND songs.source_genre = fs.source_genre ORDER BY RAND() LIMIT 5", genre)
+		err = connect.Select(&sounds, "SELECT sounds.* FROM sounds WHERE genre = ? ORDER BY RAND() LIMIT 5", genre)
 	}
 	if err != nil {
 		return
 	}
 
-	if len(songs) == 0 {
-		return nil, fmt.Errorf("Songs not found by genre = %s", genre)
+	if len(sounds) == 0 {
+		return nil, fmt.Errorf("Sounds not found by genre = %s", genre)
 	}
 
-	rainInd := rand.Intn(len(songs))
+	randInd := rand.Intn(len(sounds))
 
-	song = &songs[rainInd]
-	song.Options = songs
+	sound = &sounds[randInd]
+	sound.Options = sounds
 
-	return song, nil
+	return sound, nil
 }
 
-func getKeyboardMarkup(song *Song) (keyboard tgbotapi.InlineKeyboardMarkup) {
+func getKeyboardMarkup(sound *Sound) (keyboard tgbotapi.InlineKeyboardMarkup) {
 	rows := [][]tgbotapi.InlineKeyboardButton{}
-	for _, optionSong := range song.Options {
-		button := tgbotapi.NewInlineKeyboardButtonData(optionSong.Artist+" - "+optionSong.Title, strconv.Itoa(optionSong.ID))
+	for _, optionSound := range sound.Options {
+		button := tgbotapi.NewInlineKeyboardButtonData(optionSound.Title, strconv.Itoa(optionSound.ID))
 		row := tgbotapi.NewInlineKeyboardRow(button)
 		rows = append(rows, row)
 	}
@@ -304,8 +329,8 @@ func getKeyboardMarkup(song *Song) (keyboard tgbotapi.InlineKeyboardMarkup) {
 	return keyboard
 }
 
-func getQuestionTextWithSong(song *Song) string {
-	text := "_Who sings the following text?_\n\n" + song.Lyrics
+func getQuestionTextWithSound(sound *Sound, inlineMessageId string) string {
+	text := "_Where does_ [this music](https://t.me/KnowMusicBot?start=" + inlineMessageId + ") _play?_\n\n"
 	return text
 }
 
@@ -406,21 +431,4 @@ func sendTop(bot *tgbotapi.BotAPI, chatId int64) {
 	}
 	message := tgbotapi.NewMessage(chatId, text)
 	bot.Send(message)
-}
-
-func getSongsInfo(connect *sqlx.DB) (infoText string, err error) {
-	genreTracks := []DbCountInfo{}
-	err = connect.Select(&genreTracks, "SELECT source_genre AS f, COUNT(1) AS cnt FROM songs GROUP BY source_genre")
-	genreArtists := []DbCountInfo{}
-	err = connect.Select(&genreArtists, "SELECT source_genre AS f, COUNT(DISTINCT artist) AS cnt FROM songs GROUP BY source_genre")
-	infoText = "Tracks by genre:\n"
-	for _, cntInfoTracks := range genreTracks {
-		infoText += cntInfoTracks.Field + " - " + cntInfoTracks.Count + "\n"
-	}
-
-	infoText += "\nArtists by genre:\n"
-	for _, cntInfoTracks := range genreArtists {
-		infoText += cntInfoTracks.Field + " - " + cntInfoTracks.Count + "\n"
-	}
-	return
 }

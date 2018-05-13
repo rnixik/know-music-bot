@@ -4,5 +4,5 @@
 *.so
 *.dylib
 .env
-guess-song
+know-music
 nohup.log

@@ -1,3 +1,3 @@
 #!/bin/bash
-pkill -f guess-song
-nohup ./guess-song > nohup.log &
+pkill -f know-music
+nohup ./know-music > nohup.log &
