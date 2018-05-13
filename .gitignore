@@ -4,5 +4,5 @@
 *.so
 *.dylib
 .env
-know-music
+know-music-bot
 nohup.log
