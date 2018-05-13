@@ -330,7 +330,7 @@ func getKeyboardMarkup(sound *Sound) (keyboard tgbotapi.InlineKeyboardMarkup) {
 }
 
 func getQuestionTextWithSound(sound *Sound, inlineMessageId string) string {
-	text := "_Where does_ [this music](https://t.me/KnowMusicBot?start=" + inlineMessageId + ") _play?_\n\n"
+	text := "_Where does_ [this music](https://t.me/KnowMusicBot?start=" + inlineMessageId + ") _play? (Click link then press Start)_\n\n"
 	return text
 }
 
