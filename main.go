@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var genres map[string]string
@@ -68,6 +69,8 @@ func main() {
 
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
+	startGarbageCollector()
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
@@ -106,6 +109,8 @@ func main() {
 				}
 				game, ok := games[gameInlineId]
 				if !ok {
+					callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "Game not found")
+					bot.AnswerCallbackQuery(callbackConfig)
 					continue
 				}
 				err = game.AnswerOnQuestion(update.CallbackQuery.ID, update.CallbackQuery.Message.Chat.ID, answerQuestionNumber, answerMusicId)
@@ -300,4 +305,26 @@ func sendAdminTop(chatId int64) {
 
 	message := tgbotapi.NewMessage(chatId, text)
 	bot.Send(message)
+}
+
+func startGarbageCollector() {
+	ticker := time.NewTicker(10 * time.Second)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				for gameKey, game := range games {
+					if game.IsOld() {
+						log.Println("Remove an old game")
+						games[gameKey] = nil
+						delete(games, gameKey)
+					}
+				}
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 }

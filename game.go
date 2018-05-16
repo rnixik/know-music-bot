@@ -128,6 +128,14 @@ func (g *Game) IsEnded() bool {
 	return g.winner != nil
 }
 
+func (g *Game) IsOld() bool {
+	severalHoursAgo := time.Now().Add(time.Duration(-180) * time.Minute)
+	if g.startedAt.Before(severalHoursAgo) {
+		return true
+	}
+	return false
+}
+
 func (g *Game) hasWinner(player *Player) bool {
 	return player.Score >= g.scoreLimit
 }
