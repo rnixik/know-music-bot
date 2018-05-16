@@ -12,7 +12,7 @@ Bot works in inline mode. Any user in any chat can start the game typing `@KnowM
 3. Create a new bot using [@BotFather](https://t.me/BotFather). Save the token
 4. Copy `.env.example` to `.env`
 5. Open and edit `.env`. Provide mysql credentials and token of your bot.
-6. Run `go build && ./know-music`
+6. Run `go get ./... && go build && ./know-music-bot`
 
 ## License
 

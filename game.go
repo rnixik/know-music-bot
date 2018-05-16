@@ -241,7 +241,7 @@ func (g *Game) updateInvitationMessage() (err error) {
 func (g *Game) getRandomMusic() (m *Music, err error) {
 	music := []Music{}
 
-	err = g.db.Select(&music, "SELECT music.* FROM music WHERE (genre = ? OR '"+anyGenre+"' = ?) ORDER BY RAND() LIMIT 5", g.genre, g.genre)
+	err = g.db.Select(&music, "SELECT id, title, file_id, genre, lang FROM music WHERE (genre = ? OR '"+anyGenre+"' = ?) ORDER BY RAND() LIMIT 5", g.genre, g.genre)
 
 	if err != nil {
 		return
