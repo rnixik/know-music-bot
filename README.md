@@ -8,10 +8,10 @@ Bot works in inline mode. Any user in any chat can start the game typing `@KnowM
 ## Run
 
 1. Create a new MySQL database using `schema.sql`
-2. Fill table `sounds` with some titles
+2. Fill table `music` with some titles
 3. Create a new bot using [@BotFather](https://t.me/BotFather). Save the token
 4. Copy `.env.example` to `.env`
-5. Open and edit `.env`. Provide mysql credentials and token of your bot.
+5. Edit `.env`. Provide mysql credentials and token of your bot.
 6. Run `go get ./... && go build && ./know-music-bot`
 
 ## License
