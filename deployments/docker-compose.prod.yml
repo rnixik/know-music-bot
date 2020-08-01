@@ -1,0 +1,16 @@
+version: '3.5'
+
+services:
+  app:
+    build:
+      context: ./../
+      dockerfile: ./build/Dockerfile
+    networks:
+      - mysql
+    volumes:
+    - ./.env:/app/.env
+    restart: always
+
+networks:
+  mysql:
+    external: true
